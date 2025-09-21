@@ -78,50 +78,51 @@ func main() {
 
 	fmt.Println("Cassandra session established. Preparing statement...")
 
-	// --- Query Execution ---
-	// Changed from SELECT * to SELECT eqp_model to avoid the "not enough columns" error.
-	query := "SELECT eqp_model FROM test_table WHERE eqp_model = ? AND job_id = ? AND strtgy_name = ?"
-
 	fmt.Printf("Executing %d concurrent queries with a concurrency level of %d...\n", numQueries, concurrency)
 
 	var wg sync.WaitGroup
 	var successfulQueries int64
+	var mu sync.Mutex
 
 	startTime := time.Now()
 
-	// Use a buffered channel to act as a semaphore for limiting concurrency.
-	semaphore := make(chan struct{}, concurrency)
+	// Create a channel to send jobs (query IDs) to workers
+	jobs := make(chan int, numQueries)
 
-	for i := 0; i < numQueries; i++ {
+	// Start a fixed number of worker goroutines
+	for w := 1; w <= concurrency; w++ {
 		wg.Add(1)
-		semaphore <- struct{}{}
-
-		go func(queryID int) {
+		go func(workerID int) {
 			defer wg.Done()
-			defer func() { <-semaphore }()
-
-			// Use a key from the pre-generated list.
-			key := allKeys[queryID%len(allKeys)]
-
-			iter := session.Query(
-				query,
-				key.EqpModel,
-				key.JobID,
-				key.StrategyName,
-			).Iter()
-
-			var dummy string
-			if iter.Scan(&dummy) {
-				// If Scan returns true, it means a row was found.
-				successfulQueries++
+			for queryID := range jobs {
+				key := allKeys[queryID%len(allKeys)]
+		
+				iter := session.Query(
+					"SELECT eqp_model FROM test_table WHERE eqp_model = ? AND job_id = ? AND strtgy_name = ?",
+					key.EqpModel, key.JobID, key.StrategyName,
+				).Iter()
+		
+				var dummy string
+				if iter.Scan(&dummy) {
+					mu.Lock()
+					successfulQueries++
+					mu.Unlock()
+				}
+		
+				if err := iter.Close(); err != nil {
+					log.Printf("Query %d failed: %v", queryID, err)
+				}
 			}
-			
-			if err := iter.Close(); err != nil {
-				log.Printf("Query %d failed: %v", queryID, err)
-			}
-		}(i)
+		}(w)
 	}
+	
+	// Submit all the jobs to the channel
+	for i := 0; i < numQueries; i++ {
+		jobs <- i
+	}
+	close(jobs)
 
+	// Wait for all workers to complete their jobs
 	wg.Wait()
 
 	totalTime := time.Since(startTime)

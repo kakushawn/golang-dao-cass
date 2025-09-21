@@ -2,10 +2,7 @@ module cassandra-test
 
 go 1.24.5
 
-require (
-	github.com/gocql/gocql v1.7.0
-	github.com/google/uuid v1.6.0
-)
+require github.com/gocql/gocql v1.7.0
 
 require (
 	github.com/golang/snappy v0.0.3 // indirect
